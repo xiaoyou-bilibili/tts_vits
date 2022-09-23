@@ -8,14 +8,10 @@
 ## 效果展示
 ![](./source/01.png)
 
-合成效果
+合成效果：
+[派蒙](./source/paimon.wav)
+[默认](./source/default.wav)
 
-<audio src="./source/paimon.wav" preload="none" controls loop>
-  你的浏览器不支持 audio 标签。
-</audio>
-<audio src="./source/default.wav" preload="none" controls loop>
-  你的浏览器不支持 audio 标签。
-</audio>
 
 ## 项目运行
 ```shell
