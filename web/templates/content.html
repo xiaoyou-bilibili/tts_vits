@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>paddle语音合成</title>
+    <link rel="stylesheet" type="text/css" href="https://www.layuicdn.com/layui/css/layui.css" />
+    <script src="https://www.layuicdn.com/layui/layui.js"></script>
+    <script src="https://cdn.bootcdn.net/ajax/libs/layer/3.5.1/layer.js"></script>
+    <!--    引入jQuery-->
+    <script src="https://cdn.bootcdn.net/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+    <style>
+        .field-left{
+            width: 80%;
+        }
+        .field-right{
+            width: 20%;
+        }
+        .layui-field-box img{
+            max-width: 100%;
+        }
+        .layui-table tbody tr {
+            height: 50px;
+        }
+        .layui-table-cell{
+            height: auto;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+<div style="display: flex;align-content: center;justify-content: center">
+    <div class="layui-tab" style="width: 80%">
+          <ul class="layui-tab-title">
+            <li class="layui-this">语音合成</li>
+          </ul>
+          <div class="layui-tab-content">
+            <div class="layui-tab-item layui-show">
+                <form class="layui-form" action="">
+                  <div class="layui-form-item">
+                    <label class="layui-form-label">文本内容</label>
+                    <div class="layui-input-block">
+                      <input type="text" name="content" required  lay-verify="required" placeholder="请输入内容" autocomplete="off" class="layui-input">
+                    </div>
+                  </div>
+                  <div class="layui-form-item">
+                    <label class="layui-form-label">人物模型</label>
+                    <div class="layui-input-block">
+                      <select name="model">
+                        <option value="default">默认</option>
+                        <option value="paimon">派蒙</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="layui-form-item">
+                    <div class="layui-input-block">
+                      <button class="layui-btn" lay-submit lay-filter="generate">立即合成</button>
+                      <button type="reset" class="layui-btn layui-btn-primary">重置</button>
+                    </div>
+                  </div>
+                </form>
+                <div style="display: flex;margin-top: 30px">
+                    <fieldset class="layui-elem-field field-right">
+                      <legend>合成结果</legend>
+                        <video id="generate_audio" style="height: 50px;width: 300px;margin: 20px" controls="" name="media"><source src="" type="audio/x-wav"></video>
+                    </fieldset>
+                  </div>
+            </div>
+          </div>
+    </div>
+</div>
+<script type="text/html" id="barDemo">
+  <a class="layui-btn layui-btn-xs" lay-event="add">添加</a>
+</script>
+<script>
+// 选项卡依赖element模块
+layui.use('element', function(){});
+// 弹窗函数
+let index = null
+function load() {
+    index = layer.load(1, {shade: [0.6, '#000000']})
+}
+function close() {
+    layer.close(index)
+}
+// 语音合成
+layui.use('form', function(){
+  var form = layui.form;
+  //监听提交
+  form.on('submit(generate)', function(data){
+      load()
+    $.post("/tts/generate", data.field, (data, _)=>{
+        layer.msg('合成成功！', {icon: 6})
+        document.getElementById("generate_audio").src = data.audio + "?t=" + Math.random()
+        close()
+    })
+    return false;
+  });
+});
+// 上传功能
+layui.use('upload', function() {
+    var upload = layui.upload;
+    // 语音识别
+    upload.render({
+    elem: '#speech_recognize', //绑定元素
+    accept: 'audio', // 只允许用户上传音频
+    auto: false, // 不自动上传
+    choose: function (obj){
+      // 上传前我们需要输入相关信息
+      obj.preview(function(index, file, result){
+        // 发送post请求
+        $.post("/recognize", {"data": result}, (data, _)=>{
+            console.log(data)
+            document.getElementById("recognize-res").innerText = data.txt
+             document.getElementById("recognize_mel_res").src = data.mel + "?t=" + Math.random()
+            layer.msg('添加成功！', {icon: 6})
+            close()
+        })
+        layer.close(index);
+      })
+    }
+});
+})
+</script>
+</body>
+</html>
