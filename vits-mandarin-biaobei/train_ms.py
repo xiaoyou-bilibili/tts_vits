@@ -44,6 +44,7 @@ global_step = 0
 
 
 def main():
+  #  这里可以设置多卡训练
   """Assume Single Node Multi GPUs Training Only"""
   assert torch.cuda.is_available(), "CPU training is not allowed."
 
@@ -68,7 +69,9 @@ def run(rank, n_gpus, hps):
   torch.manual_seed(hps.train.seed)
   torch.cuda.set_device(rank)
 
+  # 构造我们的数据集
   train_dataset = TextAudioSpeakerLoader(hps.data.training_files, hps.data)
+  # 因为音频数据长度变化很大，所以这里会对样本进行桶排序来组batch，确保每个样本变化幅度保持稳定
   train_sampler = DistributedBucketSampler(
       train_dataset,
       hps.train.batch_size,
@@ -76,7 +79,9 @@ def run(rank, n_gpus, hps):
       num_replicas=n_gpus,
       rank=rank,
       shuffle=True)
+  # 对我们数据进行一个填充
   collate_fn = TextAudioSpeakerCollate()
+  # 加载我们的数据
   train_loader = DataLoader(train_dataset, num_workers=8, shuffle=False, pin_memory=True,
       collate_fn=collate_fn, batch_sampler=train_sampler)
   if rank == 0:
@@ -84,14 +89,16 @@ def run(rank, n_gpus, hps):
     eval_loader = DataLoader(eval_dataset, num_workers=8, shuffle=False,
         batch_size=hps.train.batch_size, pin_memory=True,
         drop_last=False, collate_fn=collate_fn)
-
+  #  这里定义了一个生成器
   net_g = SynthesizerTrn(
       len(symbols),
       hps.data.filter_length // 2 + 1,
       hps.train.segment_size // hps.data.hop_length,
       n_speakers=hps.data.n_speakers,
       **hps.model).cuda(rank)
+  # 这里定义了一个判别器
   net_d = MultiPeriodDiscriminator(hps.model.use_spectral_norm).cuda(rank)
+  # 这里分别为不同的生成器定义了对应的判别器
   optim_g = torch.optim.AdamW(
       net_g.parameters(), 
       hps.train.learning_rate, 
@@ -102,31 +109,34 @@ def run(rank, n_gpus, hps):
       hps.train.learning_rate, 
       betas=hps.train.betas, 
       eps=hps.train.eps)
+  # 因为我们是多GPU分布式训练，所以这里还需要再包一层
   net_g = DDP(net_g, device_ids=[rank])
   net_d = DDP(net_d, device_ids=[rank])
-
+  # 如果已经有模型了，那么我们就直接load，用于恢复训练
   try:
     _, _, _, epoch_str = utils.load_checkpoint(utils.latest_checkpoint_path(hps.model_dir, "G_*.pth"), net_g, optim_g)
     _, _, _, epoch_str = utils.load_checkpoint(utils.latest_checkpoint_path(hps.model_dir, "D_*.pth"), net_d, optim_d)
+    # 计算训练步数
     global_step = (epoch_str - 1) * len(train_loader)
   except:
     epoch_str = 1
     global_step = 0
-
+  # 设置学习率
   scheduler_g = torch.optim.lr_scheduler.ExponentialLR(optim_g, gamma=hps.train.lr_decay, last_epoch=epoch_str-2)
   scheduler_d = torch.optim.lr_scheduler.ExponentialLR(optim_d, gamma=hps.train.lr_decay, last_epoch=epoch_str-2)
-
+  # 设置混合训练，这里使用fp16来进行训练，可以在效率和性能上取得一个平衡
   scaler = GradScaler(enabled=hps.train.fp16_run)
-
+  # 开始进行每轮迭代
   for epoch in range(epoch_str, hps.train.epochs + 1):
     if rank==0:
       train_and_evaluate(rank, epoch, hps, [net_g, net_d], [optim_g, optim_d], [scheduler_g, scheduler_d], scaler, [train_loader, eval_loader], logger, [writer, writer_eval])
     else:
       train_and_evaluate(rank, epoch, hps, [net_g, net_d], [optim_g, optim_d], [scheduler_g, scheduler_d], scaler, [train_loader, None], None, None)
+    # 更新一下学习率
     scheduler_g.step()
     scheduler_d.step()
 
-
+# 训练和验证函数
 def train_and_evaluate(rank, epoch, hps, nets, optims, schedulers, scaler, loaders, logger, writers):
   net_g, net_d = nets
   optim_g, optim_d = optims
@@ -137,19 +147,22 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, schedulers, scaler, loade
 
   train_loader.batch_sampler.set_epoch(epoch)
   global global_step
-
+  # 把生成器和判别器设置为训练模式
   net_g.train()
   net_d.train()
+  # 对数据集进行遍历
   for batch_idx, (x, x_lengths, spec, spec_lengths, y, y_lengths, speakers) in enumerate(train_loader):
+    # 把数据拷贝到cuda上
     x, x_lengths = x.cuda(rank, non_blocking=True), x_lengths.cuda(rank, non_blocking=True)
     spec, spec_lengths = spec.cuda(rank, non_blocking=True), spec_lengths.cuda(rank, non_blocking=True)
     y, y_lengths = y.cuda(rank, non_blocking=True), y_lengths.cuda(rank, non_blocking=True)
     speakers = speakers.cuda(rank, non_blocking=True)
-
+    # 这里使用fp16来进行训练
     with autocast(enabled=hps.train.fp16_run):
+      # 运行生成器得到我们的波形(这里会进行一个窗口的采样)
       y_hat, l_length, attn, ids_slice, x_mask, z_mask,\
       (z, z_p, m_p, logs_p, m_q, logs_q) = net_g(x, x_lengths, spec, spec_lengths, speakers)
-
+      # 这里先把线性谱转换为梅尔谱
       mel = spec_to_mel_torch(
           spec, 
           hps.data.filter_length, 
@@ -157,6 +170,7 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, schedulers, scaler, loade
           hps.data.sampling_rate,
           hps.data.mel_fmin, 
           hps.data.mel_fmax)
+      # 获取预测的梅尔谱
       y_mel = commons.slice_segments(mel, ids_slice, hps.train.segment_size // hps.data.hop_length)
       y_hat_mel = mel_spectrogram_torch(
           y_hat.squeeze(1), 
@@ -172,7 +186,9 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, schedulers, scaler, loade
       y = commons.slice_segments(y, ids_slice * hps.data.hop_length, hps.train.segment_size) # slice 
 
       # Discriminator
+      # 把生成的波形送给判别器进行判断，得到一个分数
       y_d_hat_r, y_d_hat_g, _, _ = net_d(y, y_hat.detach())
+      # 这里是在更新判别器的一个损失
       with autocast(enabled=False):
         loss_disc, losses_disc_r, losses_disc_g = discriminator_loss(y_d_hat_r, y_d_hat_g)
         loss_disc_all = loss_disc
@@ -181,7 +197,7 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, schedulers, scaler, loade
     scaler.unscale_(optim_d)
     grad_norm_d = commons.clip_grad_value_(net_d.parameters(), None)
     scaler.step(optim_d)
-
+    # 这里是在更新生成器的损失
     with autocast(enabled=hps.train.fp16_run):
       # Generator
       y_d_hat_r, y_d_hat_g, fmap_r, fmap_g = net_d(y, y_hat)
@@ -191,7 +207,9 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, schedulers, scaler, loade
         loss_kl = kl_loss(z_p, logs_q, m_p, logs_p, z_mask) * hps.train.c_kl
 
         loss_fm = feature_loss(fmap_r, fmap_g)
+        # 这里是对抗loss计算
         loss_gen, losses_gen = generator_loss(y_d_hat_g)
+        # 这里是总的loss，是由多个loss相加得到的
         loss_gen_all = loss_gen + loss_fm + loss_mel + loss_dur + loss_kl
     optim_g.zero_grad()
     scaler.scale(loss_gen_all).backward()
@@ -199,7 +217,7 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, schedulers, scaler, loade
     grad_norm_g = commons.clip_grad_value_(net_g.parameters(), None)
     scaler.step(optim_g)
     scaler.update()
-
+    # 这里会在主GPU上进行打印、更新和保存模型操作
     if rank==0:
       if global_step % hps.train.log_interval == 0:
         lr = optim_g.param_groups[0]['lr']
