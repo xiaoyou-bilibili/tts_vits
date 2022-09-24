@@ -156,6 +156,7 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
         3) computes spectrograms from audio files.
     """
     def __init__(self, audiopaths_sid_text, hparams):
+        # 这里定义了一些音频属性
         self.audiopaths_sid_text = load_filepaths_and_text(audiopaths_sid_text)
         self.text_cleaners = hparams.text_cleaners
         self.max_wav_value = hparams.max_wav_value
@@ -174,7 +175,7 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
         random.seed(1234)
         random.shuffle(self.audiopaths_sid_text)
         self._filter()
-
+    # 这里会对文本进行过滤
     def _filter(self):
         """
         Filter text & store spec lengths
@@ -193,9 +194,12 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
         self.lengths = lengths
 
     def get_audio_text_speaker_pair(self, audiopath_sid_text):
+        # 这里解析我们的文本，分别是文件名，说话人ID，以及对于的文本
         # separate filename, speaker_id and text
         audiopath, sid, text = audiopath_sid_text[0], audiopath_sid_text[1], audiopath_sid_text[2]
+        # 对字符串进行处理
         text = self.get_text(text)
+        # 加载音频
         spec, wav = self.get_audio(audiopath)
         sid = self.get_sid(sid)
         return (text, spec, wav, sid)
@@ -252,25 +256,28 @@ class TextAudioSpeakerCollate():
         batch: [text_normalized, spec_normalized, wav_normalized, sid]
         """
         # Right zero-pad all one-hot text sequences to max input length
+        # 对元素的第一个元素进行排序（也就是频谱）
         _, ids_sorted_decreasing = torch.sort(
             torch.LongTensor([x[1].size(1) for x in batch]),
             dim=0, descending=True)
-
+        # 获取文本、频谱、音频的最大长度
         max_text_len = max([len(x[0]) for x in batch])
         max_spec_len = max([x[1].size(1) for x in batch])
         max_wav_len = max([x[2].size(1) for x in batch])
-
+        # 获取每个音频的真实长度
         text_lengths = torch.LongTensor(len(batch))
         spec_lengths = torch.LongTensor(len(batch))
         wav_lengths = torch.LongTensor(len(batch))
         sid = torch.LongTensor(len(batch))
-
+        # 这里我们对数据进行填充，填充到最大的频谱
         text_padded = torch.LongTensor(len(batch), max_text_len)
         spec_padded = torch.FloatTensor(len(batch), batch[0][1].size(0), max_spec_len)
         wav_padded = torch.FloatTensor(len(batch), 1, max_wav_len)
+        # 用0初始化
         text_padded.zero_()
         spec_padded.zero_()
         wav_padded.zero_()
+        # 这里把我们排序好的数据给填充进去
         for i in range(len(ids_sorted_decreasing)):
             row = batch[ids_sorted_decreasing[i]]
 
@@ -292,7 +299,8 @@ class TextAudioSpeakerCollate():
             return text_padded, text_lengths, spec_padded, spec_lengths, wav_padded, wav_lengths, sid, ids_sorted_decreasing
         return text_padded, text_lengths, spec_padded, spec_lengths, wav_padded, wav_lengths, sid
 
-
+# 因为我们的数据长度变化很大，所有这里会对数据进行桶排序，这样数据的变化范围变化就不会很大
+# 主要是为了提高训练效率
 class DistributedBucketSampler(torch.utils.data.distributed.DistributedSampler):
     """
     Maintain similar input lengths in a batch.
@@ -302,12 +310,13 @@ class DistributedBucketSampler(torch.utils.data.distributed.DistributedSampler):
     It removes samples which are not included in the boundaries.
     Ex) boundaries = [b1, b2, b3] -> any x s.t. length(x) <= b1 or length(x) > b3 are discarded.
     """
+    # boundaries 是按照边界去划分桶
     def __init__(self, dataset, batch_size, boundaries, num_replicas=None, rank=None, shuffle=True):
         super().__init__(dataset, num_replicas=num_replicas, rank=rank, shuffle=shuffle)
         self.lengths = dataset.lengths
         self.batch_size = batch_size
         self.boundaries = boundaries
-  
+        # 返回桶以及桶里面的样本数
         self.buckets, self.num_samples_per_bucket = self._create_buckets()
         self.total_size = sum(self.num_samples_per_bucket)
         self.num_samples = self.total_size // self.num_replicas
@@ -332,7 +341,8 @@ class DistributedBucketSampler(torch.utils.data.distributed.DistributedSampler):
             rem = (total_batch_size - (len_bucket % total_batch_size)) % total_batch_size
             num_samples_per_bucket.append(len_bucket + rem)
         return buckets, num_samples_per_bucket
-  
+
+    # 这里是一个迭代器，用于数据迭代
     def __iter__(self):
       # deterministically shuffle based on epoch
       g = torch.Generator()
@@ -358,6 +368,7 @@ class DistributedBucketSampler(torch.utils.data.distributed.DistributedSampler):
           ids_bucket = ids_bucket + ids_bucket * (rem // len_bucket) + ids_bucket[:(rem % len_bucket)]
   
           # subsample
+          # 因为我们是支持多GPU训练的，所以这里会按照GPU数量来取数据
           ids_bucket = ids_bucket[self.rank::self.num_replicas]
   
           # batching

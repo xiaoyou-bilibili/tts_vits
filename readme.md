@@ -156,7 +156,9 @@ with open("filelists/paimon_train.txt.cleaned") as f:
 
 ## 算法原理
 
-[点击跳转](./study.md)
+可以去看这个大佬的视频：https://www.bilibili.com/video/BV1VG411h75N
+
+这个项目用到了对抗生成网络的思想
 
 ## 相关问题
 ### sndfile library not found

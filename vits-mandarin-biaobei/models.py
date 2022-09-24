@@ -151,10 +151,10 @@ class TextEncoder(nn.Module):
     self.n_layers = n_layers
     self.kernel_size = kernel_size
     self.p_dropout = p_dropout
-
+    # 单词表征为向量
     self.emb = nn.Embedding(n_vocab, hidden_channels)
     nn.init.normal_(self.emb.weight, 0.0, hidden_channels**-0.5)
-
+    # 这里是使用的transform来进行编码
     self.encoder = attentions.Encoder(
       hidden_channels,
       filter_channels,
@@ -162,6 +162,7 @@ class TextEncoder(nn.Module):
       n_layers,
       kernel_size,
       p_dropout)
+    # 输出均值和标准差
     self.proj= nn.Conv1d(hidden_channels, out_channels * 2, 1)
 
   def forward(self, x, x_lengths):
@@ -435,7 +436,7 @@ class SynthesizerTrn(nn.Module):
     self.gin_channels = gin_channels
 
     self.use_sdp = use_sdp
-
+    # 文本编码器，这里是以文本输入，然后获取到对应的向量，这里得到的是文本的先验分布
     self.enc_p = TextEncoder(n_vocab,
         inter_channels,
         hidden_channels,
@@ -444,15 +445,19 @@ class SynthesizerTrn(nn.Module):
         n_layers,
         kernel_size,
         p_dropout)
+    # 这里是解码器，也就是波形生成器
     self.dec = Generator(inter_channels, resblock, resblock_kernel_sizes, resblock_dilation_sizes, upsample_rates, upsample_initial_channel, upsample_kernel_sizes, gin_channels=gin_channels)
+    # 这个是后验编码器
     self.enc_q = PosteriorEncoder(spec_channels, inter_channels, hidden_channels, 5, 1, 16, gin_channels=gin_channels)
+    # 对先验分布进行提高表达能力的flow
     self.flow = ResidualCouplingBlock(inter_channels, hidden_channels, 5, 1, 4, gin_channels=gin_channels)
 
+    # 定义随机时长预测器，主要影响说话的韵律和节奏
     if use_sdp:
       self.dp = StochasticDurationPredictor(hidden_channels, 192, 3, 0.5, 4, gin_channels=gin_channels)
     else:
       self.dp = DurationPredictor(hidden_channels, 256, 3, 0.5, gin_channels=gin_channels)
-
+    # 获取说话人的身份
     if n_speakers > 1:
       self.emb_g = nn.Embedding(n_speakers, gin_channels)
 
