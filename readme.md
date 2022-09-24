@@ -156,6 +156,7 @@ with open("filelists/paimon_train.txt.cleaned") as f:
 
 ## 算法原理
 
+[点击跳转](./study.md)
 
 ## 相关问题
 ### sndfile library not found
